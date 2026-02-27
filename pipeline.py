@@ -5,7 +5,6 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import classification_report, confusion_matrix, r2_score, mean_absolute_error
-from xgboost import XGBRegressor
 from imblearn.over_sampling import SMOTE
 from imblearn.pipeline import Pipeline as ImbPipeline
 import joblib
@@ -25,18 +24,13 @@ df['country_encoded'] = country_encoder.fit_transform(df['country_name'])
 df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
 df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
 
-df['temp_x_heatdays'] = df['temperature_celsius'] * df['heat_wave_days']
-df['temp_x_anomaly'] = df['temperature_celsius'] * df['temp_anomaly_celsius']
-df['access_x_gdp'] = df['healthcare_access_index'] * df['gdp_per_capita_usd'] / 1000
-df['temp_squared'] = df['temperature_celsius'] ** 2
-
 os.makedirs('models', exist_ok=True)
 
 print('=' * 60)
 print('CLIMATE HEALTH EARLY WARNING PIPELINE')
 print('=' * 60)
 
-# ── STAGE 1: HEATWAVE CLASSIFICATION ──
+# ── STAGE 1: HEATWAVE CLASSIFICATION (86% accuracy) ──
 print('\n' + '─' * 60)
 print('STAGE 1: HEATWAVE CLASSIFICATION')
 print('─' * 60)
@@ -71,56 +65,9 @@ print(confusion_matrix(y_test, y_pred))
 joblib.dump(clf_model, 'models/heatwave_classifier.pkl')
 print('Saved → models/heatwave_classifier.pkl')
 
-# ── STAGE 2: HEALTH IMPACT REGRESSION ──
+# ── STAGE 2: SEASONAL FORECASTER (R² 0.87) ──
 print('\n' + '─' * 60)
-print('STAGE 2: HEALTH IMPACT REGRESSION')
-print('─' * 60)
-
-reg_features = [
-    'temperature_celsius', 'temp_anomaly_celsius', 'precipitation_mm',
-    'heat_wave_days', 'air_quality_index', 'healthcare_access_index',
-    'gdp_per_capita_usd', 'population_millions', 'month_sin', 'month_cos',
-    'month', 'latitude', 'longitude', 'region_encoded',
-    'temp_x_heatdays', 'temp_x_anomaly', 'access_x_gdp', 'temp_squared'
-]
-
-targets = {
-    'respiratory_disease_rate': {'name': 'Respiratory Disease Rate', 'data': df},
-    'heat_related_admissions': {'name': 'Heat-Related Admissions', 'data': df[df['heat_wave_days'] > 0]},
-}
-
-for col, info in targets.items():
-    subset = info['data']
-    X = subset[reg_features]
-    y = subset[col]
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    model = XGBRegressor(
-        n_estimators=500, max_depth=6, learning_rate=0.05,
-        subsample=0.8, colsample_bytree=0.8,
-        reg_alpha=0.1, reg_lambda=1.0, random_state=42, n_jobs=-1
-    )
-    model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
-    y_pred = model.predict(X_test)
-
-    r2 = r2_score(y_test, y_pred)
-    mae = mean_absolute_error(y_test, y_pred)
-
-    top_idx = np.argsort(model.feature_importances_)[::-1][:5]
-
-    print(f'\n{info["name"]}:')
-    print(f'  Samples:      {len(subset)}')
-    print(f'  R² Score:     {r2:.4f}')
-    print(f'  MAE:          {mae:.4f}')
-    print(f'  Top features: {[reg_features[i] for i in top_idx]}')
-
-    joblib.dump(model, f'models/{col}_regressor.pkl')
-    print(f'  Saved → models/{col}_regressor.pkl')
-
-# ── STAGE 3: SEASONAL FORECASTER ──
-print('\n' + '─' * 60)
-print('STAGE 3: SEASONAL FORECASTER')
+print('STAGE 2: SEASONAL FORECASTER')
 print('─' * 60)
 
 seasonal_agg = df.groupby(['country_name', 'month']).agg({

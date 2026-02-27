@@ -53,20 +53,15 @@
 
     <div class="main">
 
-<div class="stat-cards">
+        <div class="stat-cards">
             <div class="stat-card">
                 <div class="stat-label">Disaster Weeks</div>
                 <div class="stat-value" id="stat-weeks">—</div>
                 <div class="stat-detail" id="stat-weeks-detail"></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Health Impact Multiplier</div>
-                <div class="stat-value" id="stat-multiplier">—</div>
-                <div class="stat-detail">vs non-disaster weeks</div>
-            </div>
-            <div class="stat-card">
                 <div class="stat-label">Most Affected Region</div>
-                <div class="stat-value" id="stat-region" style="font-size:1.2rem;">—</div>
+                <div class="stat-value" id="stat-region" style="font-size:1.15rem;">—</div>
                 <div class="stat-detail" id="stat-region-detail"></div>
             </div>
             <div class="stat-card">
@@ -76,17 +71,10 @@
             </div>
         </div>
 
-        <div class="chart-row">
-            <div class="chart-panel">
-                <h3>Health Impact Trend</h3>
-                <div class="chart-subtitle">Yearly avg: disaster weeks vs non-disaster weeks</div>
-                <div id="trend-chart"></div>
-            </div>
-            <div class="chart-panel">
-                <h3>Regional Comparison</h3>
-                <div class="chart-subtitle">Avg health impact during disaster weeks by region</div>
-                <div id="regional-chart"></div>
-            </div>
+        <div class="chart-full">
+            <h3>Health Impact Trend</h3>
+            <div class="chart-subtitle">Yearly avg health impact during disaster vs normal weeks</div>
+            <div id="trend-chart"></div>
         </div>
 
         <div class="chart-full">
@@ -96,14 +84,14 @@
         </div>
 
         <div class="chart-full">
-            <h3>Seasonal Pattern</h3>
-            <div class="chart-subtitle">Monthly avg health impact across all years</div>
+            <h3>Seasonal Pattern + Forecast</h3>
+            <div class="chart-subtitle">Monthly avg across all data (solid) vs ML forecast (dashed, R² 0.87)</div>
             <div id="seasonal-chart"></div>
         </div>
 
         <div class="table-panel">
             <h3>Country Vulnerability Ranking</h3>
-            <div class="chart-subtitle">Sorted by health impact during disaster weeks</div>
+            <div class="chart-subtitle">Sorted by health impact — includes 2026 forecast</div>
             <table class="vuln-table">
                 <thead>
                     <tr>
@@ -112,6 +100,7 @@
                         <th>Region</th>
                         <th>Disaster Weeks</th>
                         <th>Avg Health Impact</th>
+                        <th>2026 Forecast</th>
                         <th>Healthcare Access</th>
                     </tr>
                 </thead>
@@ -121,9 +110,6 @@
 
     </div>
 
-    <div class="footer">
-        Data: Global Climate Health Impact Tracker 2015–2025 · All health rates per 100,000 population
-    </div>
 
 <script>
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -133,19 +119,22 @@ const DISASTER_CONFIG = {
         indicator: row => +row.heat_wave_days > 0,
         metric: row => +row.heat_related_admissions,
         metricLabel: 'Heat-Related Admissions',
-        name: 'Heatwave'
+        name: 'Heatwave',
+        forecastKey: 'heat_related_admissions'
     },
     flood: {
         indicator: row => +row.flood_indicator === 1,
         metric: row => +row.waterborne_disease_incidents,
         metricLabel: 'Waterborne Disease Incidents',
-        name: 'Flood'
+        name: 'Flood',
+        forecastKey: null
     },
     drought: {
         indicator: row => +row.drought_indicator === 1,
         metric: row => +row.respiratory_disease_rate,
         metricLabel: 'Respiratory Disease Rate',
-        name: 'Drought'
+        name: 'Drought',
+        forecastKey: 'respiratory_disease_rate'
     }
 };
 
@@ -161,26 +150,37 @@ const PLOTLY_LAYOUT = {
 const PLOTLY_CONFIG = { displayModeBar: false, responsive: true };
 
 let rawData = [];
+let forecastData = {};
+let countryMeta = {};
 
-Papa.parse('cleaned_file.csv', {
-    download: true,
-    header: true,
-    skipEmptyLines: true,
-    complete: function(results) {
-        rawData = results.data;
-        // clamp negative AQI
-        rawData.forEach(r => { if (+r.air_quality_index < 0) r.air_quality_index = '0'; });
-        // populate region filter
-        const regions = [...new Set(rawData.map(r => r.region))].sort();
-        const regionSelect = document.getElementById('region-filter');
-        regions.forEach(r => {
-            const opt = document.createElement('option');
-            opt.value = r; opt.textContent = r;
-            regionSelect.appendChild(opt);
-        });
-        updateDashboard();
-    }
-});
+async function init() {
+    const [csvText, fcResponse] = await Promise.all([
+        fetch('cleaned_file.csv').then(r => r.text()),
+        fetch('/api/forecast/all').then(r => r.json()).catch(() => ({}))
+    ]);
+
+    rawData = Papa.parse(csvText, { header: true, skipEmptyLines: true }).data;
+    rawData.forEach(r => { if (+r.air_quality_index < 0) r.air_quality_index = '0'; });
+    forecastData = fcResponse;
+
+    const regions = [...new Set(rawData.map(r => r.region))].sort();
+    const regionSelect = document.getElementById('region-filter');
+    regions.forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r; opt.textContent = r;
+        regionSelect.appendChild(opt);
+    });
+
+    rawData.forEach(r => {
+        if (!countryMeta[r.country_name]) {
+            countryMeta[r.country_name] = { code: r.country_code, region: r.region };
+        }
+    });
+
+    updateDashboard();
+}
+
+init();
 
 document.getElementById('disaster-filter').addEventListener('change', updateDashboard);
 document.getElementById('region-filter').addEventListener('change', updateDashboard);
@@ -194,7 +194,6 @@ function updateDashboard() {
     const yearEnd = +document.getElementById('year-end').value;
     const config = DISASTER_CONFIG[disasterType];
 
-    // filter data
     let data = rawData.filter(r => {
         const y = +r.year;
         return y >= yearStart && y <= yearEnd && (region === 'all' || r.region === region);
@@ -202,17 +201,13 @@ function updateDashboard() {
 
     const disasterRows = data.filter(config.indicator);
     const nonDisasterRows = data.filter(r => !config.indicator(r));
+    const countries = [...new Set(data.map(r => r.country_name))].sort();
 
-    // --- STAT CARDS ---
+    // stat cards
     document.getElementById('stat-weeks').textContent = disasterRows.length.toLocaleString();
-    document.getElementById('stat-weeks-detail').textContent = `across ${new Set(data.map(r=>r.country_name)).size} countries`;
+    document.getElementById('stat-weeks-detail').textContent = `across ${countries.length} countries`;
 
-    const avgDisaster = mean(disasterRows.map(config.metric));
-    const avgNon = mean(nonDisasterRows.map(config.metric));
-    const multiplier = avgNon > 0 ? (avgDisaster / avgNon).toFixed(1) : '—';
-    document.getElementById('stat-multiplier').textContent = multiplier + 'x';
 
-    // most affected region
     const regionImpact = groupBy(disasterRows, 'region');
     let maxRegion = '—', maxVal = 0;
     for (const [reg, rows] of Object.entries(regionImpact)) {
@@ -222,7 +217,6 @@ function updateDashboard() {
     document.getElementById('stat-region').textContent = maxRegion;
     document.getElementById('stat-region-detail').textContent = `avg ${maxVal.toFixed(1)} per 100k`;
 
-    // peak month
     const monthImpact = groupBy(disasterRows, 'month');
     let peakMonth = '—', peakVal = 0;
     for (const [m, rows] of Object.entries(monthImpact)) {
@@ -231,114 +225,147 @@ function updateDashboard() {
     }
     document.getElementById('stat-month').textContent = peakMonth;
 
-    // --- TREND CHART ---
+    // trend chart + 2026 forecast
     const years = [...new Set(data.map(r => +r.year))].sort();
     const disasterByYear = groupBy(disasterRows, 'year');
     const nonByYear = groupBy(nonDisasterRows, 'year');
-    const trendDisaster = years.map(y => mean((disasterByYear[y]||[]).map(config.metric)));
-    const trendNon = years.map(y => mean((nonByYear[y]||[]).map(config.metric)));
+    const trendDisaster = years.map(y => mean((disasterByYear[y] || []).map(config.metric)));
+    const trendNon = years.map(y => mean((nonByYear[y] || []).map(config.metric)));
 
-    Plotly.newPlot('trend-chart', [
+    const trendTraces = [
         { x: years, y: trendDisaster, name: config.name + ' weeks', type: 'scatter', mode: 'lines+markers',
           line: { color: '#2d3436', width: 2 }, marker: { size: 4 } },
         { x: years, y: trendNon, name: 'Normal weeks', type: 'scatter', mode: 'lines+markers',
           line: { color: '#ccc', width: 2, dash: 'dot' }, marker: { size: 4 } }
-    ], { ...PLOTLY_LAYOUT, height: 260, legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
-         yaxis: { ...PLOTLY_LAYOUT.yaxis, title: { text: config.metricLabel, font: { size: 10 } } } }, PLOTLY_CONFIG);
+    ];
 
-    // --- REGIONAL BAR CHART ---
-    const allRegions = [...new Set(data.map(r => r.region))].sort();
-    const regDisaster = allRegions.map(reg => {
-        const rows = disasterRows.filter(r => r.region === reg);
-        return mean(rows.map(config.metric));
-    });
+    Plotly.newPlot('trend-chart', trendTraces, {
+        ...PLOTLY_LAYOUT, height: 280,
+        legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
+        yaxis: { ...PLOTLY_LAYOUT.yaxis, title: { text: config.metricLabel, font: { size: 10 } } }
+    }, PLOTLY_CONFIG);
 
-    Plotly.newPlot('regional-chart', [{
-        x: allRegions, y: regDisaster, type: 'bar',
-        marker: { color: regDisaster.map(v => {
-            const max = Math.max(...regDisaster.filter(x => x > 0));
-            const t = max > 0 ? v / max : 0;
-            const r = Math.round(200 * t + 55 * (1 - t));
-            const g = Math.round(80 * t + 55 * (1 - t));
-            const b = Math.round(60 * t + 55 * (1 - t));
-            return `rgb(${r}, ${g}, ${b})`;
-        }) }
-    }], { ...PLOTLY_LAYOUT, height: 260,
-         margin: { l: 48, r: 20, t: 10, b: 80 },
-         xaxis: { ...PLOTLY_LAYOUT.xaxis, tickangle: -30 },
-         yaxis: { ...PLOTLY_LAYOUT.yaxis, title: { text: config.metricLabel, font: { size: 10 } } } }, PLOTLY_CONFIG);
-
-    // --- GEO HEATMAP ---
-    const countries = [...new Set(data.map(r => r.country_name))].sort();
-    const countryCodes = {};
-    const countryImpact = {};
+    // geo map
+    const countryHover = {};
+    const countryImpactMap = {};
     countries.forEach(c => {
+        const allRows = data.filter(r => r.country_name === c);
         const rows = disasterRows.filter(r => r.country_name === c);
-        countryCodes[c] = rows.length > 0 ? rows[0].country_code : data.find(r => r.country_name === c)?.country_code || '';
-        countryImpact[c] = mean(rows.map(config.metric));
+        const totalWeeks = allRows.length;
+        const disasterWeeks = rows.length;
+        const freq = totalWeeks > 0 ? ((disasterWeeks / totalWeeks) * 100).toFixed(1) : 0;
+        const avgAccess = mean(allRows.map(r => +r.healthcare_access_index));
+        const accessLabel = avgAccess < 40 ? 'Low' : avgAccess < 70 ? 'Moderate' : 'High';
+        const pop = allRows.length > 0 ? (+allRows[0].population_millions).toFixed(1) : '—';
+        countryImpactMap[c] = mean(rows.map(config.metric));
+        countryHover[c] = `<b>${c}</b><br>` +
+            `${config.name} Frequency: ${disasterWeeks}/${totalWeeks} weeks (${freq}%)<br>` +
+            `Avg ${config.metricLabel}: ${countryImpactMap[c].toFixed(1)} per 100k<br>` +
+            `Healthcare Access: ${accessLabel} (${avgAccess.toFixed(0)})<br>` +
+            `Population: ${pop}M`;
     });
 
     Plotly.newPlot('heatmap-chart', [{
         type: 'choropleth',
-        locations: countries.map(c => countryCodes[c]),
-        z: countries.map(c => countryImpact[c]),
-        text: countries,
-        hovertemplate: '%{text}<br>Avg: %{z:.1f} per 100k<extra></extra>',
+        locations: countries.map(c => countryMeta[c]?.code || ''),
+        z: countries.map(c => countryImpactMap[c]),
+        text: countries.map(c => countryHover[c]),
+        hovertemplate: '%{text}<extra></extra>',
         colorscale: [[0,'#fff5f0'],[0.2,'#fee0d2'],[0.4,'#fcbba1'],[0.6,'#fc9272'],[0.8,'#ef6548'],[1,'#c0392b']],
         colorbar: { thickness: 12, len: 0.6, tickfont: { size: 10, color: '#999' }, title: '' },
         marker: { line: { color: '#e0e0e0', width: 0.5 } }
     }], {
-        ...PLOTLY_LAYOUT,
-        height: 420,
+        ...PLOTLY_LAYOUT, height: 420,
         margin: { l: 0, r: 0, t: 0, b: 0 },
         geo: {
-            showframe: false,
-            showcoastlines: true,
-            coastlinecolor: '#ddd',
-            projection: { type: 'natural earth' },
-            bgcolor: 'transparent',
-            landcolor: '#f8f9fa',
-            showland: true,
-            countrycolor: '#e8e8e8',
-            showcountries: true
+            showframe: false, showcoastlines: true, coastlinecolor: '#ddd',
+            projection: { type: 'natural earth' }, bgcolor: 'transparent',
+            landcolor: '#f8f9fa', showland: true, countrycolor: '#e8e8e8', showcountries: true
         }
     }, PLOTLY_CONFIG);
 
-    // --- SEASONAL CHART ---
+    // seasonal + forecast overlay (uses all data, not just disaster weeks)
     const months = [1,2,3,4,5,6,7,8,9,10,11,12];
-    const monthDisaster = groupBy(disasterRows, 'month');
-    const seasonalY = months.map(m => mean((monthDisaster[m]||[]).map(config.metric)));
+    const monthAll = groupBy(data, 'month');
+    const seasonalY = months.map(m => mean((monthAll[m] || []).map(config.metric)));
+    const forecastMonthly = config.forecastKey ? getMonthlyForecasts(countries, config.forecastKey) : null;
 
-    Plotly.newPlot('seasonal-chart', [{
-        x: MONTH_NAMES, y: seasonalY, type: 'scatter', fill: 'tozeroy',
-        line: { color: '#2d3436', width: 2 },
-        fillcolor: 'rgba(45,52,54,0.06)'
-    }], { ...PLOTLY_LAYOUT, height: 240,
-         yaxis: { ...PLOTLY_LAYOUT.yaxis, title: { text: config.metricLabel, font: { size: 10 } } } }, PLOTLY_CONFIG);
+    const seasonalTraces = [{
+        x: MONTH_NAMES, y: seasonalY, name: 'Historical', mode: 'lines+markers',
+        line: { color: '#2d3436', width: 3 }, marker: { size: 6, color: '#2d3436' }
+    }];
 
-    // --- VULNERABILITY TABLE ---
+    if (forecastMonthly) {
+        seasonalTraces.push({
+            x: MONTH_NAMES, y: forecastMonthly, name: 'ML Forecast', mode: 'lines+markers',
+            line: { color: '#c0392b', width: 3, dash: 'dash' }, marker: { size: 6, color: '#c0392b' }
+        });
+    }
+
+    Plotly.newPlot('seasonal-chart', seasonalTraces, {
+        height: 320,
+        paper_bgcolor: '#fff',
+        plot_bgcolor: '#fff',
+        font: { family: '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif', size: 11, color: '#555' },
+        margin: { l: 50, r: 20, t: 10, b: 40 },
+        xaxis: { gridcolor: '#eee' },
+        yaxis: { gridcolor: '#eee', title: { text: config.metricLabel, font: { size: 10 } } },
+        legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } }
+    }, { displayModeBar: false, responsive: true });
+
+    // vulnerability table
     const countryStats = countries.map(c => {
         const rows = disasterRows.filter(r => r.country_name === c);
+        const fc = forecastData[c];
+        let predicted = '—';
+        if (fc && config.forecastKey) {
+            const vals = fc.map(m => m[config.forecastKey] || 0);
+            predicted = (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1);
+        }
         return {
             country: c,
-            region: rows.length > 0 ? rows[0].region : data.find(r=>r.country_name===c)?.region || '',
+            region: countryMeta[c]?.region || '',
             weeks: rows.length,
             impact: mean(rows.map(config.metric)),
-            access: mean(rows.length > 0 ? rows.map(r => +r.healthcare_access_index) : data.filter(r=>r.country_name===c).map(r => +r.healthcare_access_index))
+            access: mean(rows.length > 0 ? rows.map(r => +r.healthcare_access_index) : data.filter(r => r.country_name === c).map(r => +r.healthcare_access_index)),
+            predicted
         };
-    }).sort((a, b) => b.impact - a.impact);
+    }).sort((a, b) => b.impact - a.impact).slice(0, 10);
 
-    const tbody = document.getElementById('vuln-tbody');
-    tbody.innerHTML = countryStats.map((c, i) => `
+    const maxImpact = Math.max(...countryStats.map(c => c.impact)) * 1.5 || 1;
+    const maxForecast = Math.max(...countryStats.map(c => parseFloat(c.predicted) || 0)) * 1.5 || 1;
+    const maxAccess = Math.max(...countryStats.map(c => c.access)) || 1;
+
+    function inlineBar(value, max, color) {
+        const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+        return `<div style="display:flex;align-items:center;gap:10px">
+            <div style="flex:1;height:10px;background:#f0f0f0;border-radius:5px;min-width:100px">
+                <div style="width:${pct}%;height:100%;background:${color};border-radius:5px"></div>
+            </div>
+            <span style="font-size:0.75rem;color:#888;min-width:32px;text-align:right">${value}</span>
+        </div>`;
+    }
+
+    document.getElementById('vuln-tbody').innerHTML = countryStats.map((c, i) => `
         <tr>
             <td>${i + 1}</td>
             <td>${c.country}</td>
             <td>${c.region}</td>
             <td>${c.weeks}</td>
-            <td>${c.impact.toFixed(1)}</td>
-            <td>${c.access.toFixed(1)}</td>
+            <td style="min-width:180px">${inlineBar(c.impact.toFixed(1), maxImpact, '#2d3436')}</td>
+            <td style="min-width:180px">${inlineBar(c.predicted, maxForecast, '#c0392b')}</td>
+            <td>${inlineBar(c.access.toFixed(1), maxAccess, '#6c9')}</td>
         </tr>
     `).join('');
+}
+
+function getMonthlyForecasts(countries, key) {
+    const relevant = countries.filter(c => forecastData[c]);
+    if (relevant.length === 0) return null;
+    return [1,2,3,4,5,6,7,8,9,10,11,12].map(m => {
+        const vals = relevant.map(c => forecastData[c][m - 1]?.[key] || 0);
+        return vals.reduce((a, b) => a + b, 0) / vals.length;
+    });
 }
 
 function mean(arr) {
