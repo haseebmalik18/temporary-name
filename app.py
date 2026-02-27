@@ -1,19 +1,22 @@
+import os
 import numpy as np
 import pandas as pd
 import joblib
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 app = Flask(__name__, static_folder='.')
 CORS(app)
 
-respiratory_forecast = joblib.load('models/respiratory_disease_rate_forecaster.pkl')
-heat_forecast = joblib.load('models/heat_related_admissions_forecaster.pkl')
-country_encoder = joblib.load('models/country_encoder.pkl')
+respiratory_forecast = joblib.load(os.path.join(BASE_DIR, 'models/respiratory_disease_rate_forecaster.pkl'))
+heat_forecast = joblib.load(os.path.join(BASE_DIR, 'models/heat_related_admissions_forecaster.pkl'))
+country_encoder = joblib.load(os.path.join(BASE_DIR, 'models/country_encoder.pkl'))
 
 COUNTRY_CLASSES = list(country_encoder.classes_)
 
-df = pd.read_csv('cleaned_file.csv')
+df = pd.read_csv(os.path.join(BASE_DIR, 'cleaned_file.csv'))
 country_meta = {}
 for _, r in df.iterrows():
     c = r['country_name']
