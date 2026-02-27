@@ -1,2 +1,6 @@
 pandas
 plotly
+scikit-learn
+xgboost
+imbalanced-learn
+joblib
