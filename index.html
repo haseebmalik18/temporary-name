@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Climate Health Impact Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+
+    <div class="header">
+        <h1>Climate Health Impact Dashboard</h1>
+    </div>
+
+    <div class="filters-bar">
+        <div class="filter-group">
+            <label>Disaster Type</label>
+            <select id="disaster-filter">
+                <option value="heatwave">Heatwaves</option>
+                <option value="flood">Floods</option>
+                <option value="drought">Droughts</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label>Region</label>
+            <select id="region-filter">
+                <option value="all">All Regions</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label>Year Range</label>
+            <div class="year-range">
+                <select id="year-start">
+                    <option>2015</option><option>2016</option><option>2017</option>
+                    <option>2018</option><option>2019</option><option>2020</option>
+                    <option>2021</option><option>2022</option><option>2023</option>
+                    <option>2024</option><option>2025</option>
+                </select>
+                <span>to</span>
+                <select id="year-end">
+                    <option value="2025" selected>2025</option><option value="2024">2024</option>
+                    <option value="2023">2023</option><option value="2022">2022</option>
+                    <option value="2021">2021</option><option value="2020">2020</option>
+                    <option value="2019">2019</option><option value="2018">2018</option>
+                    <option value="2017">2017</option><option value="2016">2016</option>
+                    <option value="2015">2015</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <div class="main">
+
+<div class="stat-cards">
+            <div class="stat-card">
+                <div class="stat-label">Disaster Weeks</div>
+                <div class="stat-value" id="stat-weeks">—</div>
+                <div class="stat-detail" id="stat-weeks-detail"></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Health Impact Multiplier</div>
+                <div class="stat-value" id="stat-multiplier">—</div>
+                <div class="stat-detail">vs non-disaster weeks</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Most Affected Region</div>
+                <div class="stat-value" id="stat-region" style="font-size:1.2rem;">—</div>
+                <div class="stat-detail" id="stat-region-detail"></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Peak Risk Month</div>
+                <div class="stat-value" id="stat-month">—</div>
+                <div class="stat-detail">historically highest</div>
+            </div>
+        </div>
+
+        <div class="chart-row">
+            <div class="chart-panel">
+                <h3>Health Impact Trend</h3>
+                <div class="chart-subtitle">Yearly avg: disaster weeks vs non-disaster weeks</div>
+                <div id="trend-chart"></div>
+            </div>
+            <div class="chart-panel">
+                <h3>Regional Comparison</h3>
+                <div class="chart-subtitle">Avg health impact during disaster weeks by region</div>
+                <div id="regional-chart"></div>
+            </div>
+        </div>
+
+        <div class="chart-full">
+            <h3>Global Health Impact Map</h3>
+            <div class="chart-subtitle">Country-level avg health impact during disaster weeks</div>
+            <div id="heatmap-chart"></div>
+        </div>
+
+        <div class="chart-full">
+            <h3>Seasonal Pattern</h3>
+            <div class="chart-subtitle">Monthly avg health impact across all years</div>
+            <div id="seasonal-chart"></div>
+        </div>
+
+        <div class="table-panel">
+            <h3>Country Vulnerability Ranking</h3>
+            <div class="chart-subtitle">Sorted by health impact during disaster weeks</div>
+            <table class="vuln-table">
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Country</th>
+                        <th>Region</th>
+                        <th>Disaster Weeks</th>
+                        <th>Avg Health Impact</th>
+                        <th>Healthcare Access</th>
+                    </tr>
+                </thead>
+                <tbody id="vuln-tbody"></tbody>
+            </table>
+        </div>
+
+    </div>
+
+    <div class="footer">
+        Data: Global Climate Health Impact Tracker 2015–2025 · All health rates per 100,000 population
+    </div>
+
+<script>
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+const DISASTER_CONFIG = {
+    heatwave: {
+        indicator: row => +row.heat_wave_days > 0,
+        metric: row => +row.heat_related_admissions,
+        metricLabel: 'Heat-Related Admissions',
+        name: 'Heatwave'
+    },
+    flood: {
+        indicator: row => +row.flood_indicator === 1,
+        metric: row => +row.waterborne_disease_incidents,
+        metricLabel: 'Waterborne Disease Incidents',
+        name: 'Flood'
+    },
+    drought: {
+        indicator: row => +row.drought_indicator === 1,
+        metric: row => +row.respiratory_disease_rate,
+        metricLabel: 'Respiratory Disease Rate',
+        name: 'Drought'
+    }
+};
+
+const PLOTLY_LAYOUT = {
+    paper_bgcolor: 'transparent',
+    plot_bgcolor: 'transparent',
+    font: { family: '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif', size: 11, color: '#888' },
+    margin: { l: 48, r: 20, t: 10, b: 40 },
+    xaxis: { gridcolor: '#f0f0f0', zerolinecolor: '#eee' },
+    yaxis: { gridcolor: '#f0f0f0', zerolinecolor: '#eee' }
+};
+
+const PLOTLY_CONFIG = { displayModeBar: false, responsive: true };
+
+let rawData = [];
+
+Papa.parse('cleaned_file.csv', {
+    download: true,
+    header: true,
+    skipEmptyLines: true,
+    complete: function(results) {
+        rawData = results.data;
+        // clamp negative AQI
+        rawData.forEach(r => { if (+r.air_quality_index < 0) r.air_quality_index = '0'; });
+        // populate region filter
+        const regions = [...new Set(rawData.map(r => r.region))].sort();
+        const regionSelect = document.getElementById('region-filter');
+        regions.forEach(r => {
+            const opt = document.createElement('option');
+            opt.value = r; opt.textContent = r;
+            regionSelect.appendChild(opt);
+        });
+        updateDashboard();
+    }
+});
+
+document.getElementById('disaster-filter').addEventListener('change', updateDashboard);
+document.getElementById('region-filter').addEventListener('change', updateDashboard);
+document.getElementById('year-start').addEventListener('change', updateDashboard);
+document.getElementById('year-end').addEventListener('change', updateDashboard);
+
+function updateDashboard() {
+    const disasterType = document.getElementById('disaster-filter').value;
+    const region = document.getElementById('region-filter').value;
+    const yearStart = +document.getElementById('year-start').value;
+    const yearEnd = +document.getElementById('year-end').value;
+    const config = DISASTER_CONFIG[disasterType];
+
+    // filter data
+    let data = rawData.filter(r => {
+        const y = +r.year;
+        return y >= yearStart && y <= yearEnd && (region === 'all' || r.region === region);
+    });
+
+    const disasterRows = data.filter(config.indicator);
+    const nonDisasterRows = data.filter(r => !config.indicator(r));
+
+    // --- STAT CARDS ---
+    document.getElementById('stat-weeks').textContent = disasterRows.length.toLocaleString();
+    document.getElementById('stat-weeks-detail').textContent = `across ${new Set(data.map(r=>r.country_name)).size} countries`;
+
+    const avgDisaster = mean(disasterRows.map(config.metric));
+    const avgNon = mean(nonDisasterRows.map(config.metric));
+    const multiplier = avgNon > 0 ? (avgDisaster / avgNon).toFixed(1) : '—';
+    document.getElementById('stat-multiplier').textContent = multiplier + 'x';
+
+    // most affected region
+    const regionImpact = groupBy(disasterRows, 'region');
+    let maxRegion = '—', maxVal = 0;
+    for (const [reg, rows] of Object.entries(regionImpact)) {
+        const avg = mean(rows.map(config.metric));
+        if (avg > maxVal) { maxVal = avg; maxRegion = reg; }
+    }
+    document.getElementById('stat-region').textContent = maxRegion;
+    document.getElementById('stat-region-detail').textContent = `avg ${maxVal.toFixed(1)} per 100k`;
+
+    // peak month
+    const monthImpact = groupBy(disasterRows, 'month');
+    let peakMonth = '—', peakVal = 0;
+    for (const [m, rows] of Object.entries(monthImpact)) {
+        const avg = mean(rows.map(config.metric));
+        if (avg > peakVal) { peakVal = avg; peakMonth = MONTH_NAMES[+m - 1]; }
+    }
+    document.getElementById('stat-month').textContent = peakMonth;
+
+    // --- TREND CHART ---
+    const years = [...new Set(data.map(r => +r.year))].sort();
+    const disasterByYear = groupBy(disasterRows, 'year');
+    const nonByYear = groupBy(nonDisasterRows, 'year');
+    const trendDisaster = years.map(y => mean((disasterByYear[y]||[]).map(config.metric)));
+    const trendNon = years.map(y => mean((nonByYear[y]||[]).map(config.metric)));
+
+    Plotly.newPlot('trend-chart', [
+        { x: years, y: trendDisaster, name: config.name + ' weeks', type: 'scatter', mode: 'lines+markers',
+          line: { color: '#2d3436', width: 2 }, marker: { size: 4 } },
+        { x: years, y: trendNon, name: 'Normal weeks', type: 'scatter', mode: 'lines+markers',
+          line: { color: '#ccc', width: 2, dash: 'dot' }, marker: { size: 4 } }
+    ], { ...PLOTLY_LAYOUT, height: 260, legend: { x: 0, y: 1.15, orientation: 'h', font: { size: 10 } },
+         yaxis: { ...PLOTLY_LAYOUT.yaxis, title: { text: config.metricLabel, font: { size: 10 } } } }, PLOTLY_CONFIG);
+
+    // --- REGIONAL BAR CHART ---
+    const allRegions = [...new Set(data.map(r => r.region))].sort();
+    const regDisaster = allRegions.map(reg => {
+        const rows = disasterRows.filter(r => r.region === reg);
+        return mean(rows.map(config.metric));
+    });
+
+    Plotly.newPlot('regional-chart', [{
+        x: allRegions, y: regDisaster, type: 'bar',
+        marker: { color: regDisaster.map(v => {
+            const max = Math.max(...regDisaster.filter(x => x > 0));
+            const t = max > 0 ? v / max : 0;
+            const r = Math.round(200 * t + 55 * (1 - t));
+            const g = Math.round(80 * t + 55 * (1 - t));
+            const b = Math.round(60 * t + 55 * (1 - t));
+            return `rgb(${r}, ${g}, ${b})`;
+        }) }
+    }], { ...PLOTLY_LAYOUT, height: 260,
+         margin: { l: 48, r: 20, t: 10, b: 80 },
+         xaxis: { ...PLOTLY_LAYOUT.xaxis, tickangle: -30 },
+         yaxis: { ...PLOTLY_LAYOUT.yaxis, title: { text: config.metricLabel, font: { size: 10 } } } }, PLOTLY_CONFIG);
+
+    // --- GEO HEATMAP ---
+    const countries = [...new Set(data.map(r => r.country_name))].sort();
+    const countryCodes = {};
+    const countryImpact = {};
+    countries.forEach(c => {
+        const rows = disasterRows.filter(r => r.country_name === c);
+        countryCodes[c] = rows.length > 0 ? rows[0].country_code : data.find(r => r.country_name === c)?.country_code || '';
+        countryImpact[c] = mean(rows.map(config.metric));
+    });
+
+    Plotly.newPlot('heatmap-chart', [{
+        type: 'choropleth',
+        locations: countries.map(c => countryCodes[c]),
+        z: countries.map(c => countryImpact[c]),
+        text: countries,
+        hovertemplate: '%{text}<br>Avg: %{z:.1f} per 100k<extra></extra>',
+        colorscale: [[0,'#fff5f0'],[0.2,'#fee0d2'],[0.4,'#fcbba1'],[0.6,'#fc9272'],[0.8,'#ef6548'],[1,'#c0392b']],
+        colorbar: { thickness: 12, len: 0.6, tickfont: { size: 10, color: '#999' }, title: '' },
+        marker: { line: { color: '#e0e0e0', width: 0.5 } }
+    }], {
+        ...PLOTLY_LAYOUT,
+        height: 420,
+        margin: { l: 0, r: 0, t: 0, b: 0 },
+        geo: {
+            showframe: false,
+            showcoastlines: true,
+            coastlinecolor: '#ddd',
+            projection: { type: 'natural earth' },
+            bgcolor: 'transparent',
+            landcolor: '#f8f9fa',
+            showland: true,
+            countrycolor: '#e8e8e8',
+            showcountries: true
+        }
+    }, PLOTLY_CONFIG);
+
+    // --- SEASONAL CHART ---
+    const months = [1,2,3,4,5,6,7,8,9,10,11,12];
+    const monthDisaster = groupBy(disasterRows, 'month');
+    const seasonalY = months.map(m => mean((monthDisaster[m]||[]).map(config.metric)));
+
+    Plotly.newPlot('seasonal-chart', [{
+        x: MONTH_NAMES, y: seasonalY, type: 'scatter', fill: 'tozeroy',
+        line: { color: '#2d3436', width: 2 },
+        fillcolor: 'rgba(45,52,54,0.06)'
+    }], { ...PLOTLY_LAYOUT, height: 240,
+         yaxis: { ...PLOTLY_LAYOUT.yaxis, title: { text: config.metricLabel, font: { size: 10 } } } }, PLOTLY_CONFIG);
+
+    // --- VULNERABILITY TABLE ---
+    const countryStats = countries.map(c => {
+        const rows = disasterRows.filter(r => r.country_name === c);
+        return {
+            country: c,
+            region: rows.length > 0 ? rows[0].region : data.find(r=>r.country_name===c)?.region || '',
+            weeks: rows.length,
+            impact: mean(rows.map(config.metric)),
+            access: mean(rows.length > 0 ? rows.map(r => +r.healthcare_access_index) : data.filter(r=>r.country_name===c).map(r => +r.healthcare_access_index))
+        };
+    }).sort((a, b) => b.impact - a.impact);
+
+    const tbody = document.getElementById('vuln-tbody');
+    tbody.innerHTML = countryStats.map((c, i) => `
+        <tr>
+            <td>${i + 1}</td>
+            <td>${c.country}</td>
+            <td>${c.region}</td>
+            <td>${c.weeks}</td>
+            <td>${c.impact.toFixed(1)}</td>
+            <td>${c.access.toFixed(1)}</td>
+        </tr>
+    `).join('');
+}
+
+function mean(arr) {
+    const nums = arr.filter(v => !isNaN(v) && v !== null);
+    return nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
+}
+
+function groupBy(arr, key) {
+    const groups = {};
+    arr.forEach(r => { (groups[r[key]] = groups[r[key]] || []).push(r); });
+    return groups;
+}
+</script>
+
+</body>
+</html>
